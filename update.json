@@ -1,14 +1,14 @@
 {
   "globalAddress": {
-    "jreEnvironmentAddress": "",
-    "smaliAddress": "",
-    "baksmaliAddress": "",
-    "jadxAddress": ""
+    "jreEnvironmentAddress": "https://github.com/littlepe/RNA-ROM-Public-Release/raw/refs/heads/main/files/jre21-aarch64.tar.zst",
+    "smaliAddress": "https://github.com/littlepe/RNA-ROM-Public-Release/raw/refs/heads/main/files/smali.jar",
+    "baksmaliAddress": "https://github.com/littlepe/RNA-ROM-Public-Release/raw/refs/heads/main/files/baksmali.jar",
+    "jadxAddress": "https://github.com/littlepe/RNA-ROM-Public-Release/raw/refs/heads/main/files/jadx-1.5.6-all.tar.zst"
   },
   "proxyAddress": {
-    "jreEnvironmentAddress": "",
-    "smaliAddress": "",
-    "baksmaliAddress": "",
-    "jadxAddress": ""
+    "jreEnvironmentAddress": "https://gh-proxy.org/https://github.com/littlepe/RNA-ROM-Public-Release/raw/refs/heads/main/files/jre21-aarch64.tar.zst",
+    "smaliAddress": "https://gh-proxy.org/https://github.com/littlepe/RNA-ROM-Public-Release/raw/refs/heads/main/files/smali.jar",
+    "baksmaliAddress": "https://gh-proxy.org/https://github.com/littlepe/RNA-ROM-Public-Release/raw/refs/heads/main/files/baksmali.jar",
+    "jadxAddress": "https://gh-proxy.org/https://github.com/littlepe/RNA-ROM-Public-Release/raw/refs/heads/main/files/jadx-1.5.6-all.tar.zst"
   }
 }
