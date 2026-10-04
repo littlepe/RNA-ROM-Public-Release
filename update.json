@@ -1,0 +1,14 @@
+{
+  "globalAddress": {
+    "jreEnvironmentAddress": "",
+    "smaliAddress": "",
+    "baksmaliAddress": "",
+    "jadxAddress": ""
+  },
+  "proxyAddress": {
+    "jreEnvironmentAddress": "",
+    "smaliAddress": "",
+    "baksmaliAddress": "",
+    "jadxAddress": ""
+  }
+}
