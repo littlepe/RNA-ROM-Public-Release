@@ -1,0 +1,8 @@
+# The unpackers are pure Python, the core needs nothing.
+#
+# Only the OPPO (ozip, ofp, ops) and the Sony (sin) unpackers need these two,
+# and they are imported lazily, so the rest works without them:
+#
+#   pip install -r requirements-all.txt
+lz4>=4.0
+zstandard>=0.22

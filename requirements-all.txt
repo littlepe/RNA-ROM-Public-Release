@@ -1,0 +1,5 @@
+# Everything the optional parts need.
+#
+# The core of the unpackers is pure Python and works without any of this.
+lz4>=4.0
+zstandard>=0.22
