@@ -1,0 +1,525 @@
+#!/usr/bin/env python
+"""SOTA (software OTA) changelog query
+Author: Jerry Tse
+"""
+
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Derived from OPlus-Tracker (https://github.com/JerryTse-OSS/OPlus-Tracker)
+# Copyright (C) Jerry Tse
+# Licensed under the GNU Lesser General Public License v3.0 or later,
+# see src/getrom/licenses/OPlus-Tracker/LICENSE for the full text.
+import argparse
+import base64
+import json
+import os
+import sys
+import time
+from typing import Any, Dict, List, Optional, Tuple
+
+import requests
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+from .config import OTA_PUBLIC_KEYS, OTA_REGION_CONFIG, SOTA_CONFIG
+
+
+# --- Crypto helpers ---
+
+from ...log import out
+
+def generate_random_bytes(length: int) -> bytes:
+    return os.urandom(length)
+
+
+def aes_ctr_encrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
+    cipher = Cipher(algorithms.AES(key), modes.CTR(iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    return encryptor.update(data) + encryptor.finalize()
+
+
+def aes_ctr_decrypt(ciphertext: bytes, key: bytes, iv: bytes) -> bytes:
+    cipher = Cipher(algorithms.AES(key), modes.CTR(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    return decryptor.update(ciphertext) + decryptor.finalize()
+
+
+def generate_protected_key(aes_key: bytes, public_key_pem: str) -> str:
+    public_key = serialization.load_pem_public_key(
+        public_key_pem.encode(), backend=default_backend()
+    )
+    key_b64 = base64.b64encode(aes_key)
+    ciphertext = public_key.encrypt(
+        key_b64,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA1()),
+            algorithm=hashes.SHA1(),
+            label=None,
+        ),
+    )
+    return base64.b64encode(ciphertext).decode()
+
+
+# --- Shared helpers ---
+
+def get_public_key_for_region(region: str) -> Tuple[str, Dict]:
+    """Fetch the public key and the region configuration, leaving out cn_gray and cn_cmcc."""
+    key_region = "sg" if region not in ["cn", "eu", "in"] else region
+    public_key = OTA_PUBLIC_KEYS[key_region]
+
+    if region in ["cn", "eu", "in"]:
+        config = OTA_REGION_CONFIG[region]
+    else:
+        config = OTA_REGION_CONFIG["sg_host"].copy()
+        config.update(OTA_REGION_CONFIG[region])
+
+    return public_key, config
+
+
+def parse_brand(brand_str: str) -> str:
+    brand_lower = brand_str.strip().lower()
+    if brand_lower == "oppo":
+        return "OPPO"
+    elif brand_lower == "oneplus":
+        return "OnePlus"
+    elif brand_lower == "realme":
+        return "Realme"
+    else:
+        raise ValueError(
+            f"Error: Invalid brand '{brand_str}'. Supported: OPPO, OnePlus, Realme"
+        )
+
+
+def build_headers(
+    aes_key: bytes,
+    public_key: str,
+    config: Dict[str, str],
+    region_config: Dict[str, str],
+    is_update_request: bool = False,
+) -> Dict[str, str]:
+    protected_key_payload = generate_protected_key(aes_key, public_key)
+    timestamp = str(time.time_ns() + 10**9 * 60 * 60 * 24)
+    protected_key_json = json.dumps(
+        {
+            "SCENE_1": {
+                "protectedKey": protected_key_payload,
+                "version": timestamp,
+                "negotiationVersion": region_config["public_key_version"],
+            }
+        }
+    )
+
+    headers = {
+        "language": region_config["language"],
+        "colorOSVersion": config["coloros"],
+        "androidVersion": "unknown",
+        "infVersion": "1",
+        "otaVersion": config["ota_version"],
+        "model": config["model"],
+        "mode": "taste",
+        "nvCarrier": region_config["carrier_id"],
+        "brand": config["brand"],
+        "brandSota": config["brand"],
+        "osType": "domestic_" + config["brand"] if config["region"] == "cn" else config["brand"],
+        "version": "2",
+        "deviceId": "0" * 64,
+        "protectedKey": protected_key_json,
+        "Content-Type": "application/json; charset=utf-8",
+        "User-Agent": "okhttp/4.12.0",
+        "Accept-Encoding": "gzip",
+    }
+
+    if is_update_request:
+        headers.update({"romVersion": config["rom_version"]})
+    else:
+        headers.update({"romVersion": "unknown"})
+    return headers
+
+
+def execute_query_request(
+    config: Dict[str, str],
+    region_config: Dict[str, str],
+    public_key: str,
+    url_query: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[bytes], Optional[bytes]]:
+    aes_key = generate_random_bytes(32)
+    iv = generate_random_bytes(16)
+    headers = build_headers(aes_key, public_key, config, region_config, is_update_request=False)
+
+    current_time = int(time.time() * 1000)
+    ota_update_time = current_time - (15 * 24 * 60 * 60 * 1000)
+
+    body = {
+        "mode": 0,
+        "time": current_time,
+        "isRooted": "0",
+        "isLocked": True,
+        "type": "1",
+        "securityPatch": "1970-01-01",
+        "securityPatchVendor": "1970-01-01",
+        "cota": {"cotaVersion": "", "cotaVersionName": "", "buildType": "user"},
+        "opex": {"check": True},
+        "sota": {
+            "sotaProtocolVersion": "2",
+            "sotaVersion": "V69P69",
+            "otaUpdateTime": ota_update_time,
+            "frameworkVer": "10",
+            "supportLightH": "1",
+            "updateViaReboot": 2,
+            "sotaProtocolVersionNew": ["apk", "opex", "rus"],
+        },
+        "otaAppVersion": 16000021,
+        "deviceId": "0" * 64,
+    }
+
+    payload_str = json.dumps(body)
+    cipher_text = aes_ctr_encrypt(payload_str.encode(), aes_key, iv)
+    wrapped_data = {
+        "params": json.dumps(
+            {
+                "cipher": base64.b64encode(cipher_text).decode(),
+                "iv": base64.b64encode(iv).decode(),
+            }
+        )
+    }
+
+    try:
+        response = requests.post(
+            url_query, headers=headers, json=wrapped_data, timeout=30
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"! The query failed, HTTP {response.status_code}")
+        resp_json = response.json()
+        if "body" not in resp_json:
+            raise RuntimeError('! The query response is empty')
+        encrypted_body = json.loads(resp_json["body"])
+        decrypted_bytes = aes_ctr_decrypt(
+            base64.b64decode(encrypted_body["cipher"]),
+            aes_key,
+            base64.b64decode(encrypted_body["iv"]),
+        )
+        decrypted_json = json.loads(decrypted_bytes.decode())
+        return decrypted_json, aes_key, iv
+    except Exception as e:
+        raise RuntimeError(f"! The query request/decoding failed: {str(e)}") from e
+
+
+def execute_update_request(
+    query_result: Dict[str, Any],
+    config: Dict[str, str],
+    region_config: Dict[str, str],
+    public_key: str,
+    url_update: str
+) -> Optional[Dict[str, Any]]:
+    if "sota" not in query_result:
+        raise RuntimeError('! No SOTA data in the query result')
+
+    sota_data = query_result["sota"]
+    new_sota_version = sota_data.get("sotaVersion", "")
+    if not new_sota_version:
+        raise RuntimeError('! No SOTA version in the query result')
+
+    apk_modules = sota_data.get("moduleMap", {}).get("apk", [])
+    if not apk_modules:
+        raise RuntimeError('! No APK module in the query result')
+
+    # Build a lower version number for the update request
+    sau_modules = []
+    for module in apk_modules:
+        module_name = module.get("moduleName")
+        latest_version = module.get("moduleVersion", 0)
+        if isinstance(latest_version, int) and latest_version > 100:
+            current_version = max(1, latest_version - (latest_version // 10))
+        else:
+            current_version = max(1, latest_version - 1)
+        sau_modules.append(
+            {
+                "sotaVersion": new_sota_version,
+                "moduleName": module_name,
+                "moduleVersion": current_version,
+            }
+        )
+
+    body = {
+        "sotaProtocolVersion": "2",
+        "sotaProtocolVersionNew": ["apk", "opex", "rus"],
+        "sotaVersion": "V69P69",
+        "updateViaReboot": 2,
+        "supportLightH": "1",
+        "moduleMap": {"sau": sau_modules},
+        "mode": 0,
+        "deviceId": "0" * 64,
+        "otaVersion": config["ota_version"],
+    }
+
+    update_aes_key = generate_random_bytes(32)
+    update_iv = generate_random_bytes(16)
+    headers = build_headers(
+        update_aes_key, public_key, config, region_config, is_update_request=True
+    )
+
+    payload_str = json.dumps(body)
+    cipher_text = aes_ctr_encrypt(payload_str.encode(), update_aes_key, update_iv)
+    wrapped_data = {
+        "params": json.dumps(
+            {
+                "cipher": base64.b64encode(cipher_text).decode(),
+                "iv": base64.b64encode(update_iv).decode(),
+            }
+        )
+    }
+
+    try:
+        response = requests.post(
+            url_update, headers=headers, json=wrapped_data, timeout=30
+        )
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"! The update request failed, HTTP {response.status_code}"
+            )
+        resp_json = response.json()
+        if "body" not in resp_json:
+            raise RuntimeError('! The update response is empty')
+        encrypted_body = json.loads(resp_json["body"])
+        decrypted_bytes = aes_ctr_decrypt(
+            base64.b64decode(encrypted_body["cipher"]),
+            update_aes_key,
+            base64.b64decode(encrypted_body["iv"]),
+        )
+        decrypted_json = json.loads(decrypted_bytes.decode())
+        return decrypted_json
+    except Exception as e:
+        import traceback
+
+        traceback.print_exc()
+        raise RuntimeError(f"! Update error: {str(e)}") from e
+
+
+def fetch_sota_description(
+    modules: List[Dict],
+    sota_version: str,
+    config: Dict[str, str],
+    region_config: Dict[str, str],
+    url_description: str
+) -> Optional[Dict]:
+    sota_list = []
+    for mod in modules:
+        sota_list.append(
+            {
+                "sotaVersion": sota_version,
+                "moduleName": mod["moduleName"],
+                "moduleVersion": mod["moduleVersion"],
+            }
+        )
+
+    inner_params = {
+        "otaVersion": config["ota_version"],
+        "mode": 0,
+        "deviceId": "0" * 64,
+        "sota": sota_list,
+        "sotaProtocolVersion": "2",
+        "sotaVersion": sota_version,
+        "noUpgradeModules": [],
+        "h5LinkVersion": 6,
+    }
+    params_str = json.dumps(inner_params, separators=(",", ":"), ensure_ascii=False)
+
+    headers = {
+        "language": region_config["language"],
+        "brandSota": config["brand"].lower(),
+        "sec-ch-ua-platform": "Android",
+        "colorOSVersion": config["coloros"],
+        "osType": "domestic_" + config["brand"] if config["region"] == "cn" else config["brand"],
+        "romVersion": sota_version,
+        "nvCarrier": region_config["carrier_id"],
+        "mode": "manual",
+        "osVersion": config["coloros"],
+        "otaVersion": config["ota_version"],
+        "model": config["model"],
+        "uRegion": "undefined",
+        "androidVersion": "unknown",
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json",
+        "User-Agent": "okhttp/4.12.0",
+    }
+
+    payload = {"params": params_str}
+    try:
+        response = requests.post(
+            url_description, headers=headers, json=payload, timeout=30
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        out(f"! Failed to fetch the SOTA description: {str(e)}")
+        return None
+
+
+def extract_apk_modules(update_result: Dict[str, Any]) -> Tuple[str, List[Dict]]:
+    sota_version = "Unknown"
+    modules_list = []
+    if "moduleMap" not in update_result:
+        return sota_version, modules_list
+    if "sota" in update_result and "sotaVersion" in update_result["sota"]:
+        sota_version = update_result["sota"]["sotaVersion"]
+    apk_modules = update_result["moduleMap"].get("apk", [])
+    if not apk_modules:
+        return sota_version, modules_list
+    for apk in apk_modules:
+        modules_list.append(
+            {
+                "moduleName": apk.get("moduleName", "Unknown"),
+                "moduleVersion": apk.get("moduleVersion", 0),
+            }
+        )
+        if sota_version == "Unknown" and "sotaVersion" in apk:
+            sota_version = apk["sotaVersion"]
+    return sota_version, modules_list
+
+
+def build_changelog_lines(sota_version: str, description_response: Dict) -> List[str]:
+    lines = []
+    if not description_response:
+        return ['No SOTA changelog found']
+
+    body_str = description_response.get("body")
+    if body_str:
+        try:
+            data = json.loads(body_str)
+        except Exception:
+            data = description_response
+    else:
+        data = description_response
+
+    module_map = data.get("moduleMap", {})
+    apk_modules = module_map.get("apk", [])
+    if not apk_modules:
+        return ['No APK changelog found']
+
+    lines.append(f"Get SOTA Changelog from {sota_version}\n")
+    for module in apk_modules:
+        desc_str = module.get("description", "{}")
+        try:
+            desc = json.loads(desc_str)
+        except Exception:
+            continue
+        title = desc.get("title")
+        content_list = desc.get("content", [])
+        if not content_list:
+            continue
+        lines.append(title)
+        for item in content_list:
+            data_text = item.get("data", "")
+            if data_text:
+                lines.append(data_text)
+        lines.append("")
+
+    default_desc = data.get("defaultDescription")
+    if default_desc:
+        desc_str = default_desc.get("description", "{}")
+        try:
+            desc = json.loads(desc_str)
+            title = desc.get("title")
+            content_list = desc.get("content", [])
+            if content_list:
+                lines.append(title)
+                for item in content_list:
+                    data_text = item.get("data", "")
+                    if data_text:
+                        lines.append(data_text)
+                lines.append("")
+        except Exception:
+            pass
+    return lines
+
+
+def run_sota_changelog_query(ota_version: str, region: str, brand: str, coloros: str):
+    brand = parse_brand(brand)
+    region = region.lower()
+    
+    config = {
+        "brand": brand,
+        "ota_version": ota_version,
+        "model": ota_version.split("_")[0],
+        "coloros": coloros,
+        "rom_version": "unknown",
+        "region": region
+    }
+    
+    public_key, region_config = get_public_key_for_region(region)
+    host = region_config["host"]
+    url_query = f"https://{host}{SOTA_CONFIG['endpoint_query']}"
+    url_update = f"https://{host}{SOTA_CONFIG['endpoint_update']}"
+    url_description = f"https://{host}{SOTA_CONFIG['endpoint_description']}"
+
+    query_result, _, _ = execute_query_request(config, region_config, public_key, url_query)
+    update_result = execute_update_request(query_result, config, region_config, public_key, url_update)
+    sota_version, modules_list = extract_apk_modules(update_result)
+    
+    if not modules_list:
+        return {
+            "config": config,
+            "sota_version": sota_version,
+            "output_lines": ["No available SOTA Update"],
+        }
+        
+    description_response = fetch_sota_description(modules_list, sota_version, config, region_config, url_description)
+    lines = build_changelog_lines(sota_version, description_response)
+    
+    return {"config": config, "sota_version": sota_version, "output_lines": lines}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description='SOTA system module APK query tool - changelog only',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='\nUsage example:\n  python %(prog)s PJX110_11.F.13_2130_202512181912 cn --brand OnePlus --coloros ColorOS16.0.0\n        ',
+    )
+    
+    # Positional arguments, required
+    parser.add_argument(
+        "ota_version",
+        help='OTA version (e.g. PJX110_11.F.13_2130_202512181912)',
+    )
+    
+    # Leave out cn_gray, cn_cmcc and sg_host
+    valid_regions = [r for r in OTA_REGION_CONFIG.keys() if r not in ["sg_host", "cn_gray", "cn_cmcc"]]
+    parser.add_argument(
+        "region", 
+        type=str.lower, 
+        choices=valid_regions, 
+        help='region code (e.g. cn, eu, in, gl, ...)'
+    )
+
+    # Keyword arguments, required
+    parser.add_argument(
+        "--brand", required=True, help='device brand (e.g. OnePlus, OPPO, Realme)'
+    )
+    parser.add_argument(
+        "--coloros", required=True, help='ColorOS version (e.g. ColorOS16.0.0)'
+    )
+    
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    try:
+        args = parse_args()
+        out(f"> Querying the SOTA changelog: {args.region.upper()} region...")
+        result = run_sota_changelog_query(args.ota_version, args.region, args.brand, args.coloros)
+        out(f"Device: {result['config']['model']}")
+        out(f"System: {result['config']['coloros'].replace('ColorOS', 'ColorOS ')}")
+        out()
+        for line in result["output_lines"]:
+            out(line)
+        sys.exit(0)
+    except KeyboardInterrupt:
+        out('\n\nInterrupted by user')
+        sys.exit(0)
+    except Exception as e:
+        out(f"\nUnknown error: {str(e)}")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)

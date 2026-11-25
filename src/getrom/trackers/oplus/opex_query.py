@@ -1,0 +1,371 @@
+#!/usr/bin/env python
+"""OPEX query tool
+Author: Jerry Tse
+"""
+
+# SPDX-License-Identifier: LGPL-3.0-or-later
+# Derived from OPlus-Tracker (https://github.com/JerryTse-OSS/OPlus-Tracker)
+# Copyright (C) Jerry Tse
+# Licensed under the GNU Lesser General Public License v3.0 or later,
+# see src/getrom/licenses/OPlus-Tracker/LICENSE for the full text.
+import argparse
+import base64
+import json
+import os
+import random
+import re
+import string
+import sys
+import time
+from dataclasses import dataclass
+from typing import Dict, Tuple
+
+import requests
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+from .config import OPEX_CONFIG, OTA_REGION_CONFIG
+
+
+from ...log import out, phase, warn, err
+
+
+@dataclass
+class OpexInfo:
+    index: int
+    version_name: str
+    business_code: str
+    zip_hash: str
+    auto_url: str
+
+
+# --- Helpers ---
+
+def get_opex_config_for_region(region: str) -> Tuple[str, Dict, Dict]:
+    """Return (public_key, opex_host_config, ota_region_config) for a region."""
+    key_region = "sg" if region not in ["cn", "eu", "in"] else region
+    
+    public_key = OPEX_CONFIG["keys"][key_region]
+    opex_host_cfg = OPEX_CONFIG["hosts"][key_region]
+    
+    if region in ["cn", "eu", "in"]:
+        ota_cfg = OTA_REGION_CONFIG[region]
+    else:
+        ota_cfg = OTA_REGION_CONFIG["sg_host"].copy()
+        ota_cfg.update(OTA_REGION_CONFIG[region])
+        
+    return public_key, opex_host_cfg, ota_cfg
+
+
+def generate_random_string(length: int = 64) -> str:
+    characters = string.ascii_uppercase + string.digits
+    return "".join(random.choices(characters, k=length))
+
+
+def generate_random_bytes(length: int) -> bytes:
+    return os.urandom(length)
+
+
+def parse_os_version(os_version_str: str) -> str:
+    match = re.search(r"^(\d+)(?:\.(\d+)(?:\.(\d+))?)?$", os_version_str.strip())
+    if match:
+        return (
+            f"ColorOS{match.group(1)}.{match.group(2) or '0'}.{match.group(3) or '0'}"
+        )
+    match = re.search(r"V(\d+\.\d+\.\d+)", os_version_str)
+    if match:
+        return f"ColorOS{match.group(1)}"
+    return os_version_str if os_version_str.startswith("ColorOS") else os_version_str
+
+
+def parse_brand(brand_str: str) -> str:
+    brand_lower = brand_str.strip().lower()
+    if brand_lower == "oppo":
+        return "OPPO"
+    elif brand_lower == "oneplus":
+        return "OnePlus"
+    elif brand_lower == "realme":
+        return "Realme"
+    else:
+        raise ValueError(
+            f"\nError: invalid brand '{brand_str}'. Supported: OPPO, OnePlus, Realme"
+        )
+
+
+def extract_model_from_ota_version(ota_version: str) -> str:
+    if not ota_version:
+        return "unknown"
+    parts = ota_version.split("_")
+    return parts[0] if parts else "unknown"
+
+
+# --- Crypto core ---
+
+def generate_protected_key(aes_key: bytes, public_key_pem: str) -> str:
+    public_key = serialization.load_pem_public_key(
+        public_key_pem.encode(), backend=default_backend()
+    )
+    key_b64 = base64.b64encode(aes_key)
+    ciphertext = public_key.encrypt(
+        key_b64,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA1()),
+            algorithm=hashes.SHA1(),
+            label=None,
+        ),
+    )
+    return base64.b64encode(ciphertext).decode()
+
+
+def aes_ctr_encrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
+    cipher = Cipher(algorithms.AES(key), modes.CTR(iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    return encryptor.update(data) + encryptor.finalize()
+
+
+def aes_ctr_decrypt(ciphertext: bytes, key: bytes, iv: bytes) -> bytes:
+    cipher = Cipher(algorithms.AES(key), modes.CTR(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    return decryptor.update(ciphertext) + decryptor.finalize()
+
+
+# --- Request building and execution ---
+
+def build_headers(
+    ota_version: str,
+    model: str,
+    android_version: str,
+    os_version: str,
+    brand: str,
+    device_id: str,
+    protected_key: str,
+    opex_host_cfg: Dict,
+    ota_cfg: Dict
+) -> Dict:
+    headers = {
+        "language": ota_cfg["language"],
+        "newLanguage": ota_cfg["language"],
+        "androidVersion": android_version,
+        "nvCarrier": ota_cfg["carrier_id"],
+        "deviceId": device_id,
+        "osVersion": os_version,
+        "productName": model,
+        "brand": brand,
+        "queryMode": "0",
+        "version": "1",
+        "Content-Type": "application/json; charset=utf-8",
+        "User-Agent": "okhttp/5.3.2",
+    }
+    expire_time = str(time.time_ns() + 10**9 * 60 * 60 * 24)
+    headers["protectedKey"] = json.dumps(
+        {
+            "opex": {
+                "protectedKey": protected_key,
+                "version": expire_time,
+                "negotiationVersion": opex_host_cfg["public_key_version"],
+            }
+        }
+    )
+    return headers
+
+
+def query_opex(
+    ota_version: str, region: str, os_version: str, brand: str, android_version: str
+) -> Dict:
+    model = extract_model_from_ota_version(ota_version)
+    public_key, opex_host_cfg, ota_cfg = get_opex_config_for_region(region)
+
+    url = f"https://{opex_host_cfg['host']}{OPEX_CONFIG['endpoint']}"
+    max_retries = 10
+
+    for attempt in range(max_retries):
+        try:
+            # A fresh key and id per request, so the server cannot serve a cached answer
+            aes_key = generate_random_bytes(32)
+            iv = generate_random_bytes(16)
+            device_id = generate_random_string(64).lower()
+            protected_key_str = generate_protected_key(aes_key, public_key)
+
+            headers = build_headers(
+                ota_version,
+                model,
+                android_version,
+                os_version,
+                brand,
+                device_id,
+                protected_key_str,
+                opex_host_cfg,
+                ota_cfg
+            )
+            raw_payload = {
+                "mode": "0",
+                "time": int(time.time() * 1000),
+                "businessList": [],
+                "otaVersion": ota_version,
+            }
+
+            payload_str = json.dumps(raw_payload)
+            cipher_text = aes_ctr_encrypt(payload_str.encode(), aes_key, iv)
+            request_data = {
+                "cipher": base64.b64encode(cipher_text).decode(),
+                "iv": base64.b64encode(iv).decode(),
+            }
+
+            response = requests.post(
+                url, headers=headers, json=request_data, timeout=30
+            )
+
+            # 1. Check the HTTP status code
+            if response.status_code != 200:
+                continue
+
+            resp_json = response.json()
+            code = resp_json.get("code", resp_json.get("responseCode", 200))
+
+            # 2. Check the business code of the JSON
+            # Retry when the server fails internally (500)
+            if code == 500:
+                continue
+
+            if code != 200 and code != 500:
+                msg = (
+                    resp_json.get("message")
+                    or resp_json.get("error")
+                    or 'Unknown error'
+                )
+                return {"model": model, "error": f"API error (code {code}): {msg}"}
+
+            # Decrypt the response
+            encrypted_body = resp_json
+            decrypted_bytes = aes_ctr_decrypt(
+                base64.b64decode(encrypted_body["cipher"]),
+                aes_key,
+                base64.b64decode(encrypted_body["iv"]),
+            )
+            body = json.loads(decrypted_bytes.decode())
+
+            return {"model": model, "error": None, "opex_list": process_result(body)}
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            return {"model": model, "error": str(e), "opex_list": []}
+    return {"model": model, "error": 'Exceeded the maximum number of retries', "opex_list": []}
+
+
+def process_result(body: Dict):
+    raw_data = body.get("data")
+    opex_list = []
+    ver_name = 'Unknown'
+
+    if isinstance(raw_data, list):
+        opex_packages = raw_data
+        ver_name = body.get("opexVersionName", 'Unknown')
+    elif isinstance(raw_data, dict):
+        opex_packages = raw_data.get("opexPackage", [])
+        ver_name = raw_data.get("opexVersionName", 'Unknown')
+    else:
+        opex_packages = []
+
+    for i, pkg in enumerate(opex_packages):
+        if not isinstance(pkg, dict):
+            continue
+        if pkg.get("code") == 200 and isinstance(pkg.get("info"), dict):
+            info = pkg["info"]
+            opex_list.append(
+                OpexInfo(
+                    index=i + 1,
+                    version_name=ver_name,
+                    business_code=pkg.get("businessCode", 'Unknown'),
+                    zip_hash=info.get("zipHash", 'Unknown'),
+                    auto_url=info.get("autoUrl", 'Unknown'),
+                )
+            )
+
+    return opex_list
+
+
+def run_opex_query(ota_version: str, region: str, info: str) -> Dict:
+    parts = info.split(",")
+    if len(parts) != 2:
+        raise ValueError("--info format must be 'osVersion,brand'")
+    os_ver_raw, brand_raw = parts
+    os_version = parse_os_version(os_ver_raw)
+    brand = parse_brand(brand_raw)
+    android_version = "Android" + os_ver_raw
+    query_result = query_opex(ota_version, region.lower(), os_version, brand, android_version)
+    query_result.update({"brand": brand, "os_version": os_version})
+    return query_result
+
+
+def main():
+    example_text = 'Example:\n  python %(prog)s PJZ110_11.C.84_1840_202601060309 cn --info 16,oneplus'
+
+    parser = argparse.ArgumentParser(
+        description='OPEX query tool - queries the OPEX / carrier updates of ColorOS',
+        epilog=example_text,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    
+    parser.add_argument("ota_version", help='full OTA version string')
+    
+    # Build the options from the configuration, leaving out the unwanted ones
+    valid_regions = [r for r in OTA_REGION_CONFIG.keys() if r not in ["sg_host", "cn_gray", "cn_cmcc"]]
+    parser.add_argument(
+        "region", 
+        type=str.lower, 
+        choices=valid_regions, 
+        help='region code (e.g. cn, eu, in, gl, ...)'
+    )
+
+    parser.add_argument(
+        "--info",
+        required=True,
+        metavar="VER,BRAND",
+        help='system info: osVersion,brand (e.g. 16,oneplus)',
+    )
+
+    if len(sys.argv) == 1:
+        parser.print_help()
+        return 1
+
+    args = parser.parse_args()
+
+    if len(args.info.split(",")) != 2:
+        out("Error: --info format must be 'osVersion,brand'")
+        out(example_text)
+        return 1
+
+    if args.ota_version.count("_") < 3:
+        out('Warning: an OPEX query typically requires a complete OTA version string.')
+
+    result = run_opex_query(args.ota_version, args.region, args.info)
+    out(f"> Querying OPEX updates: {args.region.upper()} region")
+    out(f"Model: {result['model']}")
+    out(f"Brand: {result['brand']}")
+    out(f"System: {result['os_version'].replace('ColorOS', 'ColorOS ')}")
+
+    if result.get("error"):
+        out(f"\n{result['error']}")
+        return 1
+
+    opex_list = result.get("opex_list", [])
+    if not opex_list:
+        out('> No OPEX update found')
+        return 1
+
+    out('> OPEX info:')
+    for i, opex in enumerate(opex_list):
+        out(f"  Link: {opex.auto_url}")
+        out(f"  ZIP hash: {opex.zip_hash}")
+        out(f"  OPEX codename: {opex.business_code}")
+        if i < len(opex_list) - 1:
+            out()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

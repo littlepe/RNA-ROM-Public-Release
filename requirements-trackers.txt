@@ -1,0 +1,7 @@
+# Dependencies of the tracker tools.
+#
+# The core of getrom does not need any of these, they are only required by
+# `getrom tracker --tool ...`.
+requests>=2.28
+cryptography>=41
+remotezip>=0.12

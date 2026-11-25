@@ -1,0 +1,14 @@
+include README.md
+include LICENSE
+include THIRD_PARTY_LICENSES.md
+include requirements.txt
+include requirements-trackers.txt
+recursive-include helper-apk *
+recursive-include tools/vivo_jvq *
+recursive-include src/getrom/licenses *
+recursive-include tests *.py
+prune helper-apk/build
+prune helper-apk/.gradle
+prune helper-apk/app/build
+global-exclude *.py[cod]
+global-exclude __pycache__

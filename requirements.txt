@@ -1,0 +1,10 @@
+# getrom runs on the standard library alone, there is nothing to install here.
+#
+# The tracker tools (the ported VIVO-OTA-Tracker and OPlus-Tracker) need the
+# three packages below. Install them with:
+#
+#   pip install -r requirements-trackers.txt
+#
+# requests    HTTP client used by the trackers
+# cryptography RSA and AES for the tracker protocols
+# remotezip   reads a single file out of a remote ZIP (OPEX analysis)
