@@ -1,16 +1,27 @@
 # RNA-ROM
 
-[中文](#中文) · [English](#english)
+[中文](#中文) · [English](#english) · [开源组件](#已开源的组件) · [Open Source](#open-source-components)
 
 ![Latest release](https://img.shields.io/github/v/release/littlepe/RNA-ROM-Public-Release?label=latest)
 
 RNA-ROM 致力于打造 Android 平台的全能固件处理工具。
 
-本仓库负责分发 APK 与运行时资源。主程序（RNA-ROM）目前暂未开源，后续将逐步开放。
+本仓库负责分发 APK 与运行时资源。主程序（RNA-ROM）目前暂未开源，CLI 部分已拆分为独立组件逐步开源，见[已开源的组件](#已开源的组件)。
 
 ---
 
 ## 中文
+
+### 已开源的组件
+
+主程序闭源，CLI 部分按功能拆分为独立组件开源。两者都是跨平台的纯 Python 工具，克隆对应分支后 `pip install -e .` 即可使用：
+
+| 组件 | 说明 | 源码分支 |
+| --- | --- | --- |
+| [getrom](https://github.com/littlepe/RNA-ROM-Public-Release/tree/RNA/getrom) | 官方 OTA 固件查询：vivo / iQOO、小米 / Redmi / POCO、Obric、联想、OPPO / 一加 / 真我（ColorOS）、StepAOS | `RNA/getrom` |
+| [oem-unpack](https://github.com/littlepe/RNA-ROM-Public-Release/tree/RNA/OemUnpackTool) | 厂商固件解包：华为 APP / update.bin、LG KDZ / DZ、展锐 PAC、索尼 SIN、OPPO ozip / ofp / ops、AMLogic、瑞芯微 RKFW / RKAF、诺基亚 NB0 | `RNA/OemUnpackTool` |
+
+两个组件都只依赖 Python；`oem-unpack` 的 OPPO 与索尼解包另需 `lz4` 与 `zstandard`，二者均为懒加载。
 
 ### 下载
 
@@ -55,7 +66,7 @@ RNA-ROM_<提交短哈希>-Stable.<versionCode>.apk
 ### 关于
 
 - 项目完全免费，作者为在校学生，更新频率视个人时间而定，恕不接受催更，亦不存在收费版本。
-- 主程序暂时闭源，CLI 部分将在完善后逐步开源。本仓库中的清单与资源遵循 [LICENSE](LICENSE)（MIT）；随包分发的第三方组件（JRE、jadx、smali 等）各自遵循其原始许可。
+- 主程序暂时闭源，CLI 部分已拆分为独立组件逐步开源，见[已开源的组件](#已开源的组件)。本仓库中的清单与资源遵循 [LICENSE](LICENSE)（MIT）；随包分发的第三方组件（JRE、jadx、smali 等）各自遵循其原始许可。
 - 刷机有风险。首次使用建议先以确认可回刷的固件包进行测试，并自行做好重要数据的备份。
 
 ### 支持项目
@@ -71,7 +82,18 @@ RNA-ROM 始终免费，不售卖功能或授权。若本项目对你有帮助，
 
 ## English
 
-RNA-ROM aims to be an all-in-one firmware processing tool for Android. This repository distributes APKs and runtime resources. The main program (RNA-ROM) is currently not open source and will be opened progressively in the future.
+RNA-ROM aims to be an all-in-one firmware processing tool for Android. This repository distributes APKs and runtime resources. The main program (RNA-ROM) is currently not open source; the CLI part has been split into standalone components that are open source one by one, see [Open Source Components](#open-source-components).
+
+### Open Source Components
+
+The main program is closed source, the CLI part is split into standalone components that are open source one by one. They are cross platform pure Python tools: clone the branch and run `pip install -e .`.
+
+| Component | Description | Source branch |
+| --- | --- | --- |
+| [getrom](https://github.com/littlepe/RNA-ROM-Public-Release/tree/RNA/getrom) | Official OTA firmware query: vivo / iQOO, Xiaomi / Redmi / POCO, Obric, Lenovo, OPPO / OnePlus / Realme (ColorOS), StepAOS | `RNA/getrom` |
+| [oem-unpack](https://github.com/littlepe/RNA-ROM-Public-Release/tree/RNA/OemUnpackTool) | Vendor firmware unpack: Huawei APP / update.bin, LG KDZ / DZ, Unisoc PAC, Sony SIN, OPPO ozip / ofp / ops, AMLogic, Rockchip RKFW / RKAF, Nokia NB0 | `RNA/OemUnpackTool` |
+
+Both components need nothing but Python. The OPPO and the Sony unpackers of `oem-unpack` use `lz4` and `zstandard`, they are imported lazily.
 
 ### Download
 
@@ -115,7 +137,7 @@ Official QQ group: `1031148744`
 ### About
 
 - The project is completely free. The author is a student, and the update frequency depends on personal time. Please do not rush updates. There is no paid version.
-- The main program is currently closed source. The CLI part will be open-sourced progressively after it is improved. The manifests and resources in this repository are licensed under [LICENSE](LICENSE) (MIT); third-party components distributed with the package (JRE, jadx, smali, etc.) are subject to their original licenses.
+- The main program is currently closed source. The CLI part has been split into standalone components and is open source one by one, see [Open Source Components](#open-source-components). The manifests and resources in this repository are licensed under [LICENSE](LICENSE) (MIT); third-party components distributed with the package (JRE, jadx, smali, etc.) are subject to their original licenses.
 - Flashing firmware carries risks. For first-time use, it is recommended to test with a firmware package that is confirmed to be re-flashable, and to back up important data yourself.
 
 ### Support the Project
