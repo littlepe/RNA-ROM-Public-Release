@@ -3,3 +3,5 @@
 # The core of the unpackers is pure Python and works without any of this.
 lz4>=4.0
 zstandard>=0.22
+cryptography>=41
+pyzstd>=0.7

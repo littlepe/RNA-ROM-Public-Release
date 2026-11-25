@@ -71,8 +71,9 @@ listing.print_partitions([
 pip install -e .
 ```
 
-The core needs nothing but Python. The OPPO and the Sony unpackers use `lz4`
-and `zstandard`, they are imported lazily:
+The core needs nothing but Python. The OPPO, the Sony and the newer LG DZ
+unpackers use `cryptography`, `lz4`, `zstandard` and `pyzstd`, they are
+imported lazily:
 
 ```bash
 pip install -r requirements-all.txt

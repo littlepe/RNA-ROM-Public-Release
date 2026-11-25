@@ -57,18 +57,21 @@ except Exception:
 _AES_IMPORT_ERROR = ""
 try:
     # The built in stand in (cryptography based) is preferred, it avoids the native library of the Termux pycryptodome
-    import rna_aes as AES
-except Exception as _aes_e1:
+    from . import rna_aes as AES
+except Exception:
     try:
-        from Crypto.Cipher import AES
-    except Exception as _aes_e2:
+        import rna_aes as AES
+    except Exception as _aes_e1:
         try:
-            from Cryptodome.Cipher import AES
-        except Exception as _aes_e3:
-            AES = None
-            _AES_IMPORT_ERROR = "rna_aes: {} | Crypto: {} | Cryptodome: {}".format(
-                _aes_e1, _aes_e2, _aes_e3
-            )
+            from Crypto.Cipher import AES
+        except Exception as _aes_e2:
+            try:
+                from Cryptodome.Cipher import AES
+            except Exception as _aes_e3:
+                AES = None
+                _AES_IMPORT_ERROR = "rna_aes: {} | Crypto: {} | Cryptodome: {}".format(
+                    _aes_e1, _aes_e2, _aes_e3
+                )
 
 CHUNK = 4 * 1024 * 1024
 QC_DECRYPT_CHUNK = 0x40000

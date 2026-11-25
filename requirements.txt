@@ -1,8 +1,15 @@
 # The unpackers are pure Python, the core needs nothing.
 #
-# Only the OPPO (ozip, ofp, ops) and the Sony (sin) unpackers need these two,
-# and they are imported lazily, so the rest works without them:
+# Only the OPPO (ozip, ofp, ops), the Sony (sin) and the newer LG DZ need
+# these, and they are imported lazily, so the rest works without them:
 #
 #   pip install -r requirements-all.txt
+#
+# cryptography  AES for the OPPO decryption, through the rna_aes stand in
+# lz4           the LZ4 blocks of the Sony SIN and the OPPO ozip
+# zstandard     the Zstandard payload of the OPPO ops
+# pyzstd        the Zstandard compression of the newer LG DZ
 lz4>=4.0
 zstandard>=0.22
+cryptography>=41
+pyzstd>=0.7
